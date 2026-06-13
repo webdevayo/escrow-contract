@@ -30,4 +30,4 @@ jobs:
         run: cargo test --manifest-path contracts/milestone-escrow/Cargo.toml
 
       - name: Build WASM
-        run: cargo build --release --target wasm32v1-none --manifest-path contracts/milestone-escrow/Cargo.toml
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/milestone-escrow/Cargo.toml
