@@ -18,6 +18,11 @@
     - Contract ID: `CBBRYWY6ROXCM6AHP4COM3AL6UDPTY66FXF43Q7PNEIPU53RZOGHBYP3`
     - Explorer: https://stellar.expert/explorer/testnet/contract/CBBRYWY6ROXCM6AHP4COM3AL6UDPTY66FXF43Q7PNEIPU53RZOGHBYP3
 
+### ✅ Completed (Backend):
+11. **Backend Setup** - Created an Express + TypeScript backend in `escrow-backend/`
+12. **API Endpoints** - Added endpoints to get job state, build transactions, and submit signed transactions
+13. **Pushed to GitHub** - Backend repo is live at https://github.com/Goldii-locks/escrow-backend
+
 ### 📁 Project Structure:
 ```
 Milesto/
@@ -35,33 +40,47 @@ Milesto/
 │           │   └── test.rs
 │           └── test_snapshots/
 │
-└── escrow-frontend/            # Next.js frontend
+├── escrow-frontend/            # Next.js frontend
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── tsconfig.json
+│   ├── next.config.ts
+│   ├── tailwind.config.ts
+│   ├── postcss.config.mjs
+│   ├── .gitignore
+│   ├── .env.local
+│   ├── .env.local.example
+│   ├── README.md
+│   ├── app/
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   ├── globals.css
+│   │   ├── lib/
+│   │   │   └── contract.ts
+│   │   ├── context/
+│   │   │   └── WalletContext.tsx
+│   │   ├── components/
+│   │   │   ├── Navbar.tsx
+│   │   │   └── MilestoneCard.tsx
+│   │   ├── create/
+│   │   │   └── page.tsx
+│   │   └── dashboard/
+│   │       └── page.tsx
+│   └── public/
+│
+└── escrow-backend/             # Express backend
     ├── package.json
     ├── package-lock.json
     ├── tsconfig.json
-    ├── next.config.ts
-    ├── tailwind.config.ts
-    ├── postcss.config.mjs
     ├── .gitignore
-    ├── .env.local
-    ├── .env.local.example
+    ├── .env.example
+    ├── .env
     ├── README.md
-    ├── app/
-    │   ├── layout.tsx
-    │   ├── page.tsx
-    │   ├── globals.css
-    │   ├── lib/
-    │   │   └── contract.ts
-    │   ├── context/
-    │   │   └── WalletContext.tsx
-    │   ├── components/
-    │   │   ├── Navbar.tsx
-    │   │   └── MilestoneCard.tsx
-    │   ├── create/
-    │   │   └── page.tsx
-    │   └── dashboard/
-    │       └── page.tsx
-    └── public/
+    └── src/
+        ├── index.ts
+        ├── middleware/
+        └── routes/
+            └── jobs.ts
 ```
 
 ### 🎯 Next Steps (Potential Ideas):
