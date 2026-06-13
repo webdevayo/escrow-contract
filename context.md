@@ -2,13 +2,16 @@
 
 ## Today's Achievements
 
-### ✅ Completed:
+### ✅ Completed (Frontend):
 1. **Frontend Setup** - Created a Next.js + Tailwind CSS frontend in `escrow-frontend/`
 2. **Contract Utility Functions** - Added `app/lib/contract.ts` with Soroban RPC integration
 3. **Wallet Integration** - Built `app/context/WalletContext.tsx` using Freighter browser extension API
-4. **Navbar Component** - Implemented `app/components/Navbar.tsx` with wallet connect/disconnect
+4. **Navbar Component** - Implemented `app/components/Navbar.tsx` with wallet connect/disconnect and links to Dashboard/Create Job
 5. **Home Page** - Updated `app/page.tsx` with landing content and call-to-action
-6. **Dev Server** - Successfully running on http://localhost:3001
+6. **Create Job Page** - Added `app/create/page.tsx` with form to create jobs with milestones
+7. **MilestoneCard Component** - Created `app/components/MilestoneCard.tsx` with status badges and action buttons
+8. **Job Dashboard Page** - Built `app/dashboard/page.tsx` with mock job data and milestone interaction
+9. **Dev Server** - Successfully running on http://localhost:3001 with all routes compiled!
 
 ### 📁 Project Structure:
 ```
@@ -44,15 +47,19 @@ Milesto/
     │   │   └── contract.ts
     │   ├── context/
     │   │   └── WalletContext.tsx
-    │   └── components/
-    │       └── Navbar.tsx
+    │   ├── components/
+    │   │   ├── Navbar.tsx
+    │   │   └── MilestoneCard.tsx
+    │   ├── create/
+    │   │   └── page.tsx
+    │   └── dashboard/
+    │       └── page.tsx
     └── public/
 ```
 
 ### 🎯 Next Steps (Potential Ideas):
-- Create "Create Job" page to initialize contracts
-- Add contract deployment workflow
-- Implement job detail page to view and interact with active jobs
-- Deploy contract to Stellar testnet
+- Deploy the Soroban smart contract to Stellar Testnet
+- Wire up the frontend to the actual contract (initialize, fund, deliver, approve, dispute, resolve)
+- Add support for multiple jobs
 - Add more test cases for edge scenarios
 - Audit contract for security issues
