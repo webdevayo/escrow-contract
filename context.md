@@ -34,6 +34,7 @@
 - **Contract**: Added CONTRIBUTING.md file with contributor guidelines
 - **Frontend**: Added loading skeleton to dashboard for better UX
 - **Backend**: Added GET /api/jobs/by-wallet/:address endpoint (closes issue #1)
+- **Fix**: Fixed type error in dashboard useState
 - All changes pushed to GitHub!
 
 ### 📁 Project Structure:
