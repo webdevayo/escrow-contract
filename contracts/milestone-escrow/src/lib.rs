@@ -1,8 +1,5 @@
 #![no_std]
-use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror,
-    Address, Env, Vec, token,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -16,6 +13,7 @@ pub enum Error {
     InvalidStatus = 7,
     TokenNotWhitelisted = 8,
     TokenAlreadyWhitelisted = 9,
+    InvalidAmount = 10,
 }
 
 #[contracttype]
@@ -23,6 +21,7 @@ pub enum Error {
 pub enum MilestoneStatus {
     Pending,
     Delivered,
+    PartiallyReleased,
     Released,
     Disputed,
     Refunded,
@@ -32,6 +31,7 @@ pub enum MilestoneStatus {
 #[derive(Clone, Debug)]
 pub struct Milestone {
     pub amount: i128,
+    pub released_amount: i128,
     pub status: MilestoneStatus,
 }
 
@@ -108,15 +108,18 @@ impl MilestoneEscrow {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
-        
+
         let mut whitelist: Vec<Address> = Vec::new(&env);
         whitelist.push_back(token.clone());
-        env.storage().instance().set(&DataKey::WhitelistedTokens, &whitelist);
+        env.storage()
+            .instance()
+            .set(&DataKey::WhitelistedTokens, &whitelist);
 
         let mut milestones: Vec<Milestone> = Vec::new(&env);
         for amount in milestone_amounts.iter() {
             milestones.push_back(Milestone {
                 amount,
+                released_amount: 0,
                 status: MilestoneStatus::Pending,
             });
         }
@@ -136,42 +139,58 @@ impl MilestoneEscrow {
 
     pub fn add_whitelisted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin.require_auth();
-        
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin)
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
             .ok_or(Error::NotInitialized)?;
-        
+
         if admin != stored_admin {
             return Err(Error::Unauthorized);
         }
-        
-        let mut whitelist: Vec<Address> = env.storage().instance().get(&DataKey::WhitelistedTokens)
+
+        let mut whitelist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WhitelistedTokens)
             .ok_or(Error::NotInitialized)?;
-        
+
         if whitelist.contains(&token) {
             return Err(Error::TokenAlreadyWhitelisted);
         }
-        
+
         whitelist.push_back(token);
-        env.storage().instance().set(&DataKey::WhitelistedTokens, &whitelist);
+        env.storage()
+            .instance()
+            .set(&DataKey::WhitelistedTokens, &whitelist);
         Ok(())
     }
 
     pub fn remove_whitelisted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin.require_auth();
-        
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin)
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
             .ok_or(Error::NotInitialized)?;
-        
+
         if admin != stored_admin {
             return Err(Error::Unauthorized);
         }
-        
-        let mut whitelist: Vec<Address> = env.storage().instance().get(&DataKey::WhitelistedTokens)
+
+        let mut whitelist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WhitelistedTokens)
             .ok_or(Error::NotInitialized)?;
-        
+
         if let Some(index) = whitelist.iter().position(|t| t == token) {
             whitelist.remove(index as u32);
-            env.storage().instance().set(&DataKey::WhitelistedTokens, &whitelist);
+            env.storage()
+                .instance()
+                .set(&DataKey::WhitelistedTokens, &whitelist);
             Ok(())
         } else {
             Err(Error::TokenNotWhitelisted)
@@ -179,7 +198,11 @@ impl MilestoneEscrow {
     }
 
     pub fn is_token_whitelisted(env: Env, token: Address) -> bool {
-        if let Some(whitelist) = env.storage().instance().get::<_, Vec<Address>>(&DataKey::WhitelistedTokens) {
+        if let Some(whitelist) = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&DataKey::WhitelistedTokens)
+        {
             whitelist.contains(&token)
         } else {
             false
@@ -187,13 +210,18 @@ impl MilestoneEscrow {
     }
 
     pub fn get_whitelisted_tokens(env: Env) -> Result<Vec<Address>, Error> {
-        env.storage().instance().get(&DataKey::WhitelistedTokens)
+        env.storage()
+            .instance()
+            .get(&DataKey::WhitelistedTokens)
             .ok_or(Error::NotInitialized)
     }
 
     pub fn fund(env: Env, client: Address) -> Result<(), Error> {
         client.require_auth();
-        let mut job: Job = env.storage().instance().get(&DataKey::Job)
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job)
             .ok_or(Error::NotInitialized)?;
 
         if job.funded {
@@ -212,9 +240,16 @@ impl MilestoneEscrow {
         Ok(())
     }
 
-    pub fn mark_delivered(env: Env, freelancer: Address, milestone_index: u32) -> Result<(), Error> {
+    pub fn mark_delivered(
+        env: Env,
+        freelancer: Address,
+        milestone_index: u32,
+    ) -> Result<(), Error> {
         freelancer.require_auth();
-        let mut job: Job = env.storage().instance().get(&DataKey::Job)
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job)
             .ok_or(Error::NotInitialized)?;
 
         if job.freelancer != freelancer {
@@ -224,7 +259,9 @@ impl MilestoneEscrow {
             return Err(Error::NotFunded);
         }
 
-        let mut milestone = job.milestones.get(milestone_index)
+        let mut milestone = job
+            .milestones
+            .get(milestone_index)
             .ok_or(Error::InvalidMilestone)?;
 
         if milestone.status != MilestoneStatus::Pending {
@@ -237,24 +274,88 @@ impl MilestoneEscrow {
         Ok(())
     }
 
-    pub fn approve_milestone(env: Env, client: Address, milestone_index: u32) -> Result<(), Error> {
+    pub fn approve_partial(
+        env: Env,
+        client: Address,
+        milestone_index: u32,
+        amount: i128,
+    ) -> Result<(), Error> {
         client.require_auth();
-        let mut job: Job = env.storage().instance().get(&DataKey::Job)
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job)
             .ok_or(Error::NotInitialized)?;
 
         if job.client != client {
             return Err(Error::Unauthorized);
         }
 
-        let mut milestone = job.milestones.get(milestone_index)
+        let mut milestone = job
+            .milestones
+            .get(milestone_index)
             .ok_or(Error::InvalidMilestone)?;
 
-        if milestone.status != MilestoneStatus::Delivered {
+        if milestone.status != MilestoneStatus::Delivered
+            && milestone.status != MilestoneStatus::PartiallyReleased
+        {
             return Err(Error::InvalidStatus);
         }
 
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let remaining = milestone.amount - milestone.released_amount;
+        if amount > remaining {
+            return Err(Error::InvalidAmount);
+        }
+
         let token_client = token::Client::new(&env, &job.token);
-        token_client.transfer(&env.current_contract_address(), &job.freelancer, &milestone.amount);
+        token_client.transfer(&env.current_contract_address(), &job.freelancer, &amount);
+
+        milestone.released_amount += amount;
+
+        if milestone.released_amount == milestone.amount {
+            milestone.status = MilestoneStatus::Released;
+        } else {
+            milestone.status = MilestoneStatus::PartiallyReleased;
+        }
+
+        job.milestones.set(milestone_index, milestone);
+        env.storage().instance().set(&DataKey::Job, &job);
+        Ok(())
+    }
+
+    pub fn approve_milestone(env: Env, client: Address, milestone_index: u32) -> Result<(), Error> {
+        client.require_auth();
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job)
+            .ok_or(Error::NotInitialized)?;
+
+        if job.client != client {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut milestone = job
+            .milestones
+            .get(milestone_index)
+            .ok_or(Error::InvalidMilestone)?;
+
+        if milestone.status != MilestoneStatus::Delivered
+            && milestone.status != MilestoneStatus::PartiallyReleased
+        {
+            return Err(Error::InvalidStatus);
+        }
+
+        let remaining = milestone.amount - milestone.released_amount;
+        if remaining > 0 {
+            let token_client = token::Client::new(&env, &job.token);
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &remaining);
+            milestone.released_amount = milestone.amount;
+        }
 
         milestone.status = MilestoneStatus::Released;
         job.milestones.set(milestone_index, milestone);
@@ -264,17 +365,25 @@ impl MilestoneEscrow {
 
     pub fn raise_dispute(env: Env, caller: Address, milestone_index: u32) -> Result<(), Error> {
         caller.require_auth();
-        let mut job: Job = env.storage().instance().get(&DataKey::Job)
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job)
             .ok_or(Error::NotInitialized)?;
 
         if job.client != caller && job.freelancer != caller {
             return Err(Error::Unauthorized);
         }
 
-        let mut milestone = job.milestones.get(milestone_index)
+        let mut milestone = job
+            .milestones
+            .get(milestone_index)
             .ok_or(Error::InvalidMilestone)?;
 
-        if milestone.status != MilestoneStatus::Pending && milestone.status != MilestoneStatus::Delivered {
+        if milestone.status != MilestoneStatus::Pending
+            && milestone.status != MilestoneStatus::Delivered
+            && milestone.status != MilestoneStatus::PartiallyReleased
+        {
             return Err(Error::InvalidStatus);
         }
 
@@ -291,26 +400,37 @@ impl MilestoneEscrow {
         release_to_freelancer: bool,
     ) -> Result<(), Error> {
         arbiter.require_auth();
-        let mut job: Job = env.storage().instance().get(&DataKey::Job)
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job)
             .ok_or(Error::NotInitialized)?;
 
         if job.arbiter != arbiter {
             return Err(Error::Unauthorized);
         }
 
-        let mut milestone = job.milestones.get(milestone_index)
+        let mut milestone = job
+            .milestones
+            .get(milestone_index)
             .ok_or(Error::InvalidMilestone)?;
 
         if milestone.status != MilestoneStatus::Disputed {
             return Err(Error::InvalidStatus);
         }
 
+        let remaining = milestone.amount - milestone.released_amount;
         let token_client = token::Client::new(&env, &job.token);
         if release_to_freelancer {
-            token_client.transfer(&env.current_contract_address(), &job.freelancer, &milestone.amount);
+            if remaining > 0 {
+                token_client.transfer(&env.current_contract_address(), &job.freelancer, &remaining);
+                milestone.released_amount = milestone.amount;
+            }
             milestone.status = MilestoneStatus::Released;
         } else {
-            token_client.transfer(&env.current_contract_address(), &job.client, &milestone.amount);
+            if remaining > 0 {
+                token_client.transfer(&env.current_contract_address(), &job.client, &remaining);
+            }
             milestone.status = MilestoneStatus::Refunded;
         }
 
@@ -320,7 +440,9 @@ impl MilestoneEscrow {
     }
 
     pub fn get_job(env: Env) -> Result<Job, Error> {
-        env.storage().instance().get(&DataKey::Job)
+        env.storage()
+            .instance()
+            .get(&DataKey::Job)
             .ok_or(Error::NotInitialized)
     }
 }

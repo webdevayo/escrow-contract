@@ -556,6 +556,17 @@
                                       },
                                       {
                                         "key": {
+                                          "symbol": "released_amount"
+                                        },
+                                        "val": {
+                                          "i128": {
+                                            "hi": 0,
+                                            "lo": 3000
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": {
                                           "symbol": "status"
                                         },
                                         "val": {
@@ -573,6 +584,17 @@
                                       {
                                         "key": {
                                           "symbol": "amount"
+                                        },
+                                        "val": {
+                                          "i128": {
+                                            "hi": 0,
+                                            "lo": 7000
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": {
+                                          "symbol": "released_amount"
                                         },
                                         "val": {
                                           "i128": {
