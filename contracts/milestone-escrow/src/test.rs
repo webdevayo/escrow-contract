@@ -1,6 +1,65 @@
 #![cfg(test)]
 use super::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger, vec, Address, Env};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events, testutils::Ledger, vec, Address, Env, TryIntoVal,
+};
+
+fn build_milestone_amounts(env: &Env, count: u32, amount_per: i128) -> soroban_sdk::Vec<i128> {
+    let mut amounts = vec![env];
+    for _ in 0..count {
+        amounts.push_back(amount_per);
+    }
+    amounts
+}
+
+fn setup_funded_escrow(
+    env: &Env,
+    milestone_amounts: soroban_sdk::Vec<i128>,
+) -> (
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    soroban_sdk::Address,
+    MilestoneEscrowClient<'_>,
+) {
+    let client_addr = Address::generate(env);
+    let freelancer_addr = Address::generate(env);
+    let arbiter_addr = Address::generate(env);
+    let admin_addr = Address::generate(env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(env, &token_contract_id);
+    let total: i128 = milestone_amounts.iter().sum();
+    token_admin.mint(&client_addr, &total);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(env, &contract_id);
+
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &604800,
+        &milestone_amounts,
+    );
+    client.fund(&client_addr);
+
+    (
+        client_addr,
+        freelancer_addr,
+        arbiter_addr,
+        admin_addr,
+        token_contract_id,
+        contract_id,
+        client,
+    )
+}
 
 #[test]
 fn test_full_happy_path() {

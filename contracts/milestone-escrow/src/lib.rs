@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Vec,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -85,8 +87,15 @@ pub struct FundedEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveredEvent {
+    pub contract_id: Address,
     pub milestone_index: u32,
+    pub freelancer: Address,
+    pub client: Address,
+    pub delivered_at: u64,
+    pub status: MilestoneStatus,
+    pub amount: i128,
 }
 
 #[contracttype]
@@ -332,6 +341,19 @@ impl MilestoneEscrow {
         milestone.status = MilestoneStatus::Delivered;
         milestone.delivered_at = delivered_at;
         Self::store_milestone(&env, milestone_index, &milestone);
+
+        env.events().publish(
+            (symbol_short!("deliver"),),
+            DeliveredEvent {
+                contract_id: env.current_contract_address(),
+                milestone_index,
+                freelancer: meta.freelancer,
+                client: meta.client,
+                delivered_at,
+                status: MilestoneStatus::Delivered,
+                amount: milestone.amount,
+            },
+        );
 
         Ok(())
     }
