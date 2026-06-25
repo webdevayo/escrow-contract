@@ -17,6 +17,7 @@ pub enum Error {
     TokenAlreadyWhitelisted = 9,
     InvalidAmount = 10,
     DeadlineNotPassed = 11,
+    InvalidAddress = 12,
 }
 
 #[contracttype]
@@ -144,6 +145,37 @@ impl MilestoneEscrow {
             .set(&DataKey::Milestone(index), milestone);
     }
 
+    fn checked_add_amount(total: i128, amount: i128) -> Result<i128, Error> {
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        total.checked_add(amount).ok_or(Error::InvalidAmount)
+    }
+
+    fn checked_job_total(env: &Env, meta: &JobMeta) -> Result<i128, Error> {
+        let mut total_amount: i128 = 0;
+
+        for index in 0..meta.milestone_count {
+            let milestone = Self::load_milestone(env, index)?;
+            total_amount = Self::checked_add_amount(total_amount, milestone.amount)?;
+        }
+
+        if total_amount != meta.total_amount {
+            return Err(Error::InvalidAmount);
+        }
+
+        Ok(total_amount)
+    }
+
+    fn validate_fund_client(env: &Env, client: &Address) -> Result<(), Error> {
+        if client == &env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
+        Ok(())
+    }
+
     fn assemble_job(env: &Env, meta: &JobMeta) -> Result<Job, Error> {
         let mut milestones = Vec::new(env);
         for i in 0..meta.milestone_count {
@@ -175,6 +207,12 @@ impl MilestoneEscrow {
             return Err(Error::AlreadyInitialized);
         }
 
+        let milestone_count = milestone_amounts.len();
+        let mut total_amount: i128 = 0;
+        for amount in milestone_amounts.iter() {
+            total_amount = Self::checked_add_amount(total_amount, amount)?;
+        }
+
         env.storage().instance().set(&DataKey::Admin, &admin);
 
         let mut whitelist: Vec<Address> = Vec::new(&env);
@@ -183,10 +221,7 @@ impl MilestoneEscrow {
             .instance()
             .set(&DataKey::WhitelistedTokens, &whitelist);
 
-        let milestone_count = milestone_amounts.len();
-        let mut total_amount: i128 = 0;
         for (index, amount) in milestone_amounts.iter().enumerate() {
-            total_amount += amount;
             Self::store_milestone(
                 &env,
                 index as u32,
@@ -294,6 +329,7 @@ impl MilestoneEscrow {
     }
 
     pub fn fund(env: Env, client: Address) -> Result<(), Error> {
+        Self::validate_fund_client(&env, &client)?;
         client.require_auth();
         let mut meta = Self::load_job_meta(&env)?;
 
@@ -304,8 +340,9 @@ impl MilestoneEscrow {
             return Err(Error::Unauthorized);
         }
 
+        let total_amount = Self::checked_job_total(&env, &meta)?;
         let token_client = token::Client::new(&env, &meta.token);
-        token_client.transfer(&client, &env.current_contract_address(), &meta.total_amount);
+        token_client.transfer(&client, &env.current_contract_address(), &total_amount);
 
         meta.funded = true;
         Self::store_job_meta(&env, &meta);
