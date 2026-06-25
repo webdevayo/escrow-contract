@@ -318,7 +318,8 @@ impl MilestoneEscrow {
         freelancer: Address,
         milestone_index: u32,
     ) -> Result<(), Error> {
-        if freelancer.is_zero() {
+        let zero_address = Address::from_array(&[0u8; 32]);
+        if freelancer == zero_address {
             return Err(Error::InvalidAddress);
         }
         freelancer.require_auth();
