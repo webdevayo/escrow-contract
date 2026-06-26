@@ -246,7 +246,7 @@ fn test_unauthorized_fund_fails() {
     );
 
     let result = client.try_fund(&bad_actor);
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -581,7 +581,7 @@ fn test_fund_before_initialized_fails() {
     let client = MilestoneEscrowClient::new(&env, &contract_id);
 
     let result = client.try_fund(&client_addr);
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
 
 #[test]
@@ -615,7 +615,7 @@ fn test_double_fund_fails() {
     client.fund(&client_addr);
 
     let result = client.try_fund(&client_addr);
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
 }
 
 #[test]
