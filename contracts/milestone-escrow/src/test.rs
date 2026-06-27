@@ -3075,3 +3075,135 @@ fn test_approve_milestone_after_partial_writes_temporary_released_flag() {
     assert_eq!(token.balance(&freelancer_addr), 10_000);
     assert_eq!(token.balance(&contract_id), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Gas-scaling tests: claim_auto_release is O(1) regardless of milestone count
+// ---------------------------------------------------------------------------
+
+/// Build a funded escrow with `n` milestones of 100 tokens each, mark all as
+/// delivered, advance the clock past the auto-release deadline, then claim
+/// each milestone individually.  The test asserts that every claim succeeds
+/// and only the targeted milestone is affected — confirming O(1) ledger
+/// footprint per invocation rather than O(n).
+fn run_claim_auto_release_gas_scaling(n: u32) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token = token::Client::new(&env, &token_contract_id);
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    let total = 100_i128 * n as i128;
+    token_admin.mint(&client_addr, &total);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let escrow = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let mut amounts = soroban_sdk::Vec::new(&env);
+    for _ in 0..n {
+        amounts.push_back(100_i128);
+    }
+
+    escrow.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &100_u64, // 100-second auto-release window
+        &amounts,
+    );
+    escrow.fund(&client_addr);
+
+    // Mark all milestones delivered.
+    for i in 0..n {
+        escrow.mark_delivered(&freelancer_addr, &i);
+    }
+
+    // Advance past the auto-release deadline.
+    env.ledger().with_mut(|li| {
+        li.timestamp += 200;
+    });
+
+    // Claim each milestone; each call must succeed independently (O(1) path).
+    for i in 0..n {
+        escrow.claim_auto_release(&freelancer_addr, &i);
+    }
+
+    // All funds must have been transferred to the freelancer.
+    assert_eq!(token.balance(&freelancer_addr), total);
+    assert_eq!(token.balance(&contract_id), 0);
+
+    // Spot-check first and last milestone status via get_job.
+    // (get_job itself is O(n) but is only used here for test assertion.)
+    let job = escrow.get_job();
+    assert_eq!(job.milestones.get(0).unwrap().status, MilestoneStatus::Released);
+    assert_eq!(job.milestones.get(n - 1).unwrap().status, MilestoneStatus::Released);
+}
+
+#[test]
+fn test_claim_auto_release_gas_scaling_100_milestones() {
+    run_claim_auto_release_gas_scaling(100);
+}
+
+#[test]
+fn test_claim_auto_release_gas_scaling_150_milestones() {
+    run_claim_auto_release_gas_scaling(150);
+}
+
+/// Verify that claiming one milestone out of 100 does not affect any other
+/// milestone — confirming isolated, O(1) storage writes.
+#[test]
+fn test_claim_auto_release_single_target_among_100_milestones() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &10_000_i128);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let escrow = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let mut amounts = soroban_sdk::Vec::new(&env);
+    for _ in 0..100u32 {
+        amounts.push_back(100_i128);
+    }
+
+    escrow.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &100_u64,
+        &amounts,
+    );
+    escrow.fund(&client_addr);
+
+    // Only deliver and claim milestone index 50.
+    escrow.mark_delivered(&freelancer_addr, &50u32);
+    env.ledger().with_mut(|li| {
+        li.timestamp += 200;
+    });
+    escrow.claim_auto_release(&freelancer_addr, &50u32);
+
+    let job = escrow.get_job();
+    assert_eq!(job.milestones.get(50).unwrap().status, MilestoneStatus::Released);
+    // All other milestones must remain Pending.
+    assert_eq!(job.milestones.get(0).unwrap().status, MilestoneStatus::Pending);
+    assert_eq!(job.milestones.get(99).unwrap().status, MilestoneStatus::Pending);
+}

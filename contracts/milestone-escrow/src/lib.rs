@@ -496,6 +496,22 @@ impl MilestoneEscrow {
         Ok(())
     }
 
+    /// Time-locked auto-release of a single milestone to the freelancer.
+    ///
+    /// # Gas complexity: O(1)
+    ///
+    /// This function performs a bounded, constant number of storage reads and
+    /// writes regardless of the total milestone count:
+    ///
+    /// - 1× instance read  (`DataKey::Job` → `JobMeta`)
+    /// - 1× temporary read (`DataKey::DeliveredAt(milestone_index)`)
+    /// - 1× persistent read  (`DataKey::Milestone(milestone_index)`)
+    /// - 1× persistent write (`DataKey::Milestone(milestone_index)`)
+    /// - 1× token transfer
+    ///
+    /// No loop over all milestones is performed here.  Functions that do loop
+    /// over all milestones (`checked_job_total`, `assemble_job`) are
+    /// intentionally not called from this hot path.
     pub fn claim_auto_release(
     env: Env,
     freelancer: Address,
