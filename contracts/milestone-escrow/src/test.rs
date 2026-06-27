@@ -314,8 +314,75 @@ fn test_mark_delivered_wrong_status_fails() {
     client.fund(&client_addr);
     client.mark_delivered(&freelancer_addr, &0u32);
 
+    // Double-deliver must return the exact InvalidStatus error.
     let result = client.try_mark_delivered(&freelancer_addr, &0u32);
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+/// mark_delivered on a milestone that has already been fully Released
+/// (client approved) must return InvalidStatus.
+#[test]
+fn test_mark_delivered_after_released_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client_addr, freelancer_addr, _, _, _, _, client) =
+        setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.approve_milestone(&client_addr, &0u32);
+
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+/// mark_delivered on a Disputed milestone must return InvalidStatus.
+#[test]
+fn test_mark_delivered_after_disputed_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client_addr, freelancer_addr, _, _, _, _, client) =
+        setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.raise_dispute(&client_addr, &0u32);
+
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+/// mark_delivered on a Refunded milestone must return InvalidStatus.
+#[test]
+fn test_mark_delivered_after_refunded_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client_addr, freelancer_addr, arbiter_addr, _, _, _, client) =
+        setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.raise_dispute(&client_addr, &0u32);
+    client.resolve_dispute(&arbiter_addr, &0u32, &false);
+
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+/// mark_delivered on a PartiallyReleased milestone must return InvalidStatus.
+#[test]
+fn test_mark_delivered_after_partially_released_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client_addr, freelancer_addr, _, _, _, _, client) =
+        setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.approve_partial(&client_addr, &0u32, &400_i128);
+
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
 }
 
 #[test]
