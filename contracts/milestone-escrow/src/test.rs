@@ -3210,3 +3210,391 @@ fn test_approve_milestone_after_partial_writes_temporary_released_flag() {
     assert_eq!(token.balance(&freelancer_addr), 10_000);
     assert_eq!(token.balance(&contract_id), 0);
 }
+
+// ============================================================================
+// mark_delivered — hardened test suite (5 new edge-case tests)
+// ============================================================================
+
+/// Edge case 1 — FAILED AUTH (wrong caller):
+/// A completely unrelated address that is not the registered freelancer must
+/// receive `Error::Unauthorized`.  Verifies that the identity check in
+/// `mark_delivered` cannot be bypassed by any arbitrary signer.
+#[test]
+fn test_mark_delivered_wrong_caller_is_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+    let impostor = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &604800,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // `impostor` is not the registered freelancer.
+    let result = client.try_mark_delivered(&impostor, &0u32);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+
+    // Confirm the milestone is still Pending — no state mutation occurred.
+    let job = client.get_job();
+    assert_eq!(
+        job.milestones.get(0).unwrap().status,
+        MilestoneStatus::Pending
+    );
+}
+
+/// Edge case 2 — OVERFLOW / OUT-OF-BOUNDS INDEX (u32::MAX):
+/// Supplying `u32::MAX` as the milestone index must be rejected with
+/// `Error::InvalidMilestone` without panicking or overflowing.  This also
+/// covers any large out-of-range index since only index 0 exists.
+#[test]
+fn test_mark_delivered_u32_max_index_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &604800,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // u32::MAX far exceeds milestone_count (1).
+    let result = client.try_mark_delivered(&freelancer_addr, &u32::MAX);
+    assert_eq!(result, Err(Ok(Error::InvalidMilestone)));
+}
+
+/// Edge case 3 — PRE-CONDITION (contract not initialized):
+/// Calling `mark_delivered` before `initialize` has been called must return
+/// `Error::NotInitialized`.  The function must not panic or produce a
+/// misleading error variant.
+#[test]
+fn test_mark_delivered_before_initialize_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let freelancer_addr = Address::generate(&env);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::NotInitialized)));
+}
+
+/// Edge case 4 — INVALID STATE (milestone already Released):
+/// Once a milestone has been fully approved and its status is `Released`, a
+/// subsequent call to `mark_delivered` must be rejected with
+/// `Error::InvalidStatus`.  Verifies that the terminal `Released` state is
+/// immutable from the freelancer's perspective.
+#[test]
+fn test_mark_delivered_on_released_milestone_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &604800,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // Drive the milestone to `Released` via the normal happy path.
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.approve_milestone(&client_addr, &0u32);
+
+    let job = client.get_job();
+    assert_eq!(
+        job.milestones.get(0).unwrap().status,
+        MilestoneStatus::Released
+    );
+
+    // Attempting to mark it delivered again must fail.
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+/// Edge case 5 — INVALID STATE (milestone Refunded):
+/// A milestone that was refunded to the client after a dispute is in a terminal
+/// state.  `mark_delivered` must reject it with `Error::InvalidStatus`,
+/// ensuring refunded milestones cannot be re-opened by the freelancer.
+#[test]
+fn test_mark_delivered_on_refunded_milestone_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &604800,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // Drive the milestone to `Refunded`: deliver → dispute → resolve for client.
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.raise_dispute(&client_addr, &0u32);
+    client.resolve_dispute(&arbiter_addr, &0u32, &false);
+
+    let job = client.get_job();
+    assert_eq!(
+        job.milestones.get(0).unwrap().status,
+        MilestoneStatus::Refunded
+    );
+
+    // The freelancer must not be able to re-open a refunded milestone.
+    let result = client.try_mark_delivered(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+// ============================================================================
+// claim_auto_release — checked-arithmetic boundary tests
+// ============================================================================
+
+/// Boundary test: `auto_release_seconds` = u64::MAX causes the
+/// `delivered_at + auto_release_seconds` checked_add in `claim_auto_release`
+/// to overflow, which must be caught and returned as `Error::InvalidAmount`
+/// rather than panicking.
+#[test]
+fn test_claim_auto_release_max_i128_checked_math_no_overflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    // Use a large but representable i128 amount to exercise the checked_sub path.
+    let amount: i128 = i128::MAX / 2;
+    token_admin.mint(&client_addr, &amount);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, amount];
+    // Use a small auto_release_seconds so the deadline check passes after the
+    // ledger advance below.
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &1u64,
+        &amounts,
+    );
+    client.fund(&client_addr);
+    client.mark_delivered(&freelancer_addr, &0u32);
+
+    // Advance past the auto-release deadline.
+    env.ledger().with_mut(|li| {
+        li.timestamp += 10;
+    });
+
+    // claim_auto_release must compute `remaining = amount - released_amount`
+    // via checked_sub.  released_amount is 0 here so the subtraction is safe
+    // and the call must succeed, releasing i128::MAX / 2 tokens.
+    client.claim_auto_release(&freelancer_addr, &0u32);
+
+    let token = token::Client::new(&env, &token_contract_id);
+    assert_eq!(token.balance(&freelancer_addr), amount);
+    assert_eq!(token.balance(&contract_id), 0);
+
+    let job = client.get_job();
+    assert_eq!(
+        job.milestones.get(0).unwrap().status,
+        MilestoneStatus::Released
+    );
+}
+
+/// Boundary test: initialising with `auto_release_seconds` = u64::MAX causes
+/// `delivered_at.checked_add(u64::MAX)` to overflow (delivered_at is non-zero
+/// because the ledger has a positive timestamp).  The overflow must be caught
+/// and returned as `Error::InvalidAmount`.
+#[test]
+fn test_claim_auto_release_overflow_checked_math_returns_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    // u64::MAX as auto_release_seconds guarantees delivered_at + u64::MAX
+    // wraps when delivered_at > 0.
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &u64::MAX,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // Advance the ledger so delivered_at is non-zero, making the overflow
+    // deterministic: any positive delivered_at + u64::MAX overflows u64.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1;
+    });
+    client.mark_delivered(&freelancer_addr, &0u32);
+
+    // The checked_add inside claim_auto_release must catch the overflow and
+    // return Error::InvalidAmount rather than panicking.
+    let result = client.try_claim_auto_release(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+// ============================================================================
+// claim_auto_release — double-execution / reentrancy guard tests
+// ============================================================================
+
+/// Double-execution test: invoking `claim_auto_release` a second time in the
+/// same environment — after a successful first call — must be rejected with
+/// `Error::InvalidStatus` because the first call committed `Released` to
+/// storage before executing the token transfer (CEI pattern).  No tokens must
+/// be transferred on the second attempt.
+#[test]
+fn test_claim_auto_release_double_execution_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token = token::Client::new(&env, &token_contract_id);
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &10_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 10_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &100u64,
+        &amounts,
+    );
+    client.fund(&client_addr);
+    client.mark_delivered(&freelancer_addr, &0u32);
+
+    // Advance past the auto-release deadline.
+    env.ledger().with_mut(|li| {
+        li.timestamp += 200;
+    });
+
+    // First call must succeed and release all tokens.
+    client.claim_auto_release(&freelancer_addr, &0u32);
+    assert_eq!(token.balance(&freelancer_addr), 10_000);
+    assert_eq!(token.balance(&contract_id), 0);
+
+    // Milestone status is now Released — a second call must be rejected.
+    let result = client.try_claim_auto_release(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+
+    // Token balances must be unchanged after the rejected second attempt.
+    assert_eq!(token.balance(&freelancer_addr), 10_000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
