@@ -3422,3 +3422,118 @@ fn test_mark_delivered_on_refunded_milestone_fails() {
     let result = client.try_mark_delivered(&freelancer_addr, &0u32);
     assert_eq!(result, Err(Ok(Error::InvalidStatus)));
 }
+
+// ============================================================================
+// claim_auto_release — checked-arithmetic boundary tests
+// ============================================================================
+
+/// Boundary test: `auto_release_seconds` = u64::MAX causes the
+/// `delivered_at + auto_release_seconds` checked_add in `claim_auto_release`
+/// to overflow, which must be caught and returned as `Error::InvalidAmount`
+/// rather than panicking.
+#[test]
+fn test_claim_auto_release_max_i128_checked_math_no_overflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    // Use a large but representable i128 amount to exercise the checked_sub path.
+    let amount: i128 = i128::MAX / 2;
+    token_admin.mint(&client_addr, &amount);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, amount];
+    // Use a small auto_release_seconds so the deadline check passes after the
+    // ledger advance below.
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &1u64,
+        &amounts,
+    );
+    client.fund(&client_addr);
+    client.mark_delivered(&freelancer_addr, &0u32);
+
+    // Advance past the auto-release deadline.
+    env.ledger().with_mut(|li| {
+        li.timestamp += 10;
+    });
+
+    // claim_auto_release must compute `remaining = amount - released_amount`
+    // via checked_sub.  released_amount is 0 here so the subtraction is safe
+    // and the call must succeed, releasing i128::MAX / 2 tokens.
+    client.claim_auto_release(&freelancer_addr, &0u32);
+
+    let token = token::Client::new(&env, &token_contract_id);
+    assert_eq!(token.balance(&freelancer_addr), amount);
+    assert_eq!(token.balance(&contract_id), 0);
+
+    let job = client.get_job();
+    assert_eq!(
+        job.milestones.get(0).unwrap().status,
+        MilestoneStatus::Released
+    );
+}
+
+/// Boundary test: initialising with `auto_release_seconds` = u64::MAX causes
+/// `delivered_at.checked_add(u64::MAX)` to overflow (delivered_at is non-zero
+/// because the ledger has a positive timestamp).  The overflow must be caught
+/// and returned as `Error::InvalidAmount`.
+#[test]
+fn test_claim_auto_release_overflow_checked_math_returns_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    // u64::MAX as auto_release_seconds guarantees delivered_at + u64::MAX
+    // wraps when delivered_at > 0.
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &u64::MAX,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // Advance the ledger so delivered_at is non-zero, making the overflow
+    // deterministic: any positive delivered_at + u64::MAX overflows u64.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1;
+    });
+    client.mark_delivered(&freelancer_addr, &0u32);
+
+    // The checked_add inside claim_auto_release must catch the overflow and
+    // return Error::InvalidAmount rather than panicking.
+    let result = client.try_claim_auto_release(&freelancer_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}

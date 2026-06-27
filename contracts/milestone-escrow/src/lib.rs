@@ -539,8 +539,14 @@ impl MilestoneEscrow {
         return Err(Error::DeadlineNotPassed);
     }
 
-    // 4. Validate there is a positive remaining amount to release
-    let remaining = milestone.amount - milestone.released_amount;
+    // 4. Compute remaining using checked subtraction so that corrupted or
+    //    adversarially-crafted storage values (released_amount > amount) never
+    //    produce a silent underflow.  ok_or maps the None overflow sentinel to
+    //    the existing InvalidAmount variant, keeping the error surface minimal.
+    let remaining = milestone
+        .amount
+        .checked_sub(milestone.released_amount)
+        .ok_or(Error::InvalidAmount)?;
     if remaining <= 0 {
         return Err(Error::InvalidAmount);
     }
