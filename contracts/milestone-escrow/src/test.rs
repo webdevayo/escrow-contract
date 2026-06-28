@@ -4699,3 +4699,410 @@ fn test_add_whitelisted_token_unauthorized_before_cap_check() {
     let result = client.try_add_whitelisted_token(&bad_actor, &new_token);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+
+// ============================================================================
+// STATE MACHINE TRANSITION MATRIX — remove_whitelisted_token
+// ============================================================================
+//
+// The whitelist acts as a two-state machine per token:
+//
+//   State A: NotWhitelisted  — token is absent from the whitelist vec
+//   State B: Whitelisted     — token is present in the whitelist vec
+//
+// Valid transitions:
+//   add_whitelisted_token:    A → B  (succeeds)
+//   remove_whitelisted_token: B → A  (succeeds)
+//
+// Invalid (must revert):
+//   add_whitelisted_token:    B → B  (TokenAlreadyWhitelisted)
+//   remove_whitelisted_token: A → A  (TokenNotWhitelisted)
+//
+// Auth pre-conditions (always checked before state):
+//   - Non-admin caller              → Unauthorized
+//   - Uninitialized contract        → NotInitialized
+//
+// Full matrix for remove_whitelisted_token:
+//
+// | # | Initial State   | Caller    | Contract Init? | Expected Result         |
+// |---|-----------------|-----------|----------------|-------------------------|
+// | 1 | Whitelisted     | admin     | yes            | Ok(()) → NotWhitelisted |
+// | 2 | NotWhitelisted  | admin     | yes            | Err(TokenNotWhitelisted)|
+// | 3 | Whitelisted     | non-admin | yes            | Err(Unauthorized)       |
+// | 4 | NotWhitelisted  | non-admin | yes            | Err(Unauthorized)       |
+// | 5 | N/A             | admin     | no             | Err(NotInitialized)     |
+// | 6 | Whitelisted→A   | admin     | yes            | idempotent: 2nd remove  |
+// |   | (already gone)  |           |                | Err(TokenNotWhitelisted)|
+// | 7 | Multiple tokens | admin     | yes            | only target removed,    |
+// |   | in whitelist    |           |                | siblings unchanged      |
+// | 8 | Token is the    | admin     | yes            | Ok(()) → removed even   |
+// |   | escrow token    |           |                | if it's the job token   |
+// ============================================================================
+
+/// Matrix row 1 — Valid transition: Whitelisted → NotWhitelisted
+/// Admin removes a whitelisted token. Must succeed and the token must no
+/// longer appear in is_token_whitelisted or get_whitelisted_tokens.
+#[test]
+fn test_remove_whitelisted_token_state_whitelisted_to_not_whitelisted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token2 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+    client.add_whitelisted_token(&admin_addr, &token2);
+
+    // Pre-condition: token2 is Whitelisted
+    assert!(client.is_token_whitelisted(&token2));
+
+    // Transition B → A
+    let result = client.try_remove_whitelisted_token(&admin_addr, &token2);
+    assert!(result.is_ok(), "expected Ok(()) for valid B→A transition");
+
+    // Post-condition: token2 is NotWhitelisted
+    assert!(!client.is_token_whitelisted(&token2));
+    let tokens = client.get_whitelisted_tokens().unwrap();
+    assert!(!tokens.contains(&token2));
+}
+
+/// Matrix row 2 — Invalid transition: NotWhitelisted → NotWhitelisted
+/// Admin attempts to remove a token that was never added. Must revert with
+/// TokenNotWhitelisted (A → A is forbidden).
+#[test]
+fn test_remove_whitelisted_token_state_not_whitelisted_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_never_added = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+
+    // Pre-condition: token_never_added is NotWhitelisted
+    assert!(!client.is_token_whitelisted(&token_never_added));
+
+    // Attempted A → A transition must revert
+    let result = client.try_remove_whitelisted_token(&admin_addr, &token_never_added);
+    assert_eq!(
+        result,
+        Err(Ok(Error::TokenNotWhitelisted)),
+        "expected TokenNotWhitelisted for A→A invalid transition"
+    );
+}
+
+/// Matrix row 3 — Auth pre-condition: non-admin, token is Whitelisted
+/// Even if the token is whitelisted, a non-admin caller must be rejected
+/// before any state check. Auth guard fires first.
+#[test]
+fn test_remove_whitelisted_token_non_admin_whitelisted_token_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+    let bad_actor = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token2 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+    client.add_whitelisted_token(&admin_addr, &token2);
+    assert!(client.is_token_whitelisted(&token2));
+
+    // Non-admin caller must be rejected regardless of token state
+    let result = client.try_remove_whitelisted_token(&bad_actor, &token2);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "expected Unauthorized for non-admin caller"
+    );
+
+    // State must be unchanged after failed call
+    assert!(
+        client.is_token_whitelisted(&token2),
+        "whitelist state must not change after Unauthorized rejection"
+    );
+}
+
+/// Matrix row 4 — Auth pre-condition: non-admin, token is NotWhitelisted
+/// When both caller is wrong AND token is absent, Unauthorized fires first.
+#[test]
+fn test_remove_whitelisted_token_non_admin_not_whitelisted_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+    let bad_actor = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_absent = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+
+    let result = client.try_remove_whitelisted_token(&bad_actor, &token_absent);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "expected Unauthorized even when token is also absent"
+    );
+}
+
+/// Matrix row 5 — Pre-condition: contract not initialized
+/// Admin calls remove_whitelisted_token before initialize. Must revert with
+/// NotInitialized since there is no admin record or whitelist in storage.
+#[test]
+fn test_remove_whitelisted_token_before_initialize_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin_addr = Address::generate(&env);
+    let some_token = Address::generate(&env);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    // No initialize call — storage is empty
+    let result = client.try_remove_whitelisted_token(&admin_addr, &some_token);
+    assert_eq!(
+        result,
+        Err(Ok(Error::NotInitialized)),
+        "expected NotInitialized when contract has not been initialized"
+    );
+}
+
+/// Matrix row 6 — Idempotency / double-remove: B → A → (A → A revert)
+/// After a successful removal (B → A), a second remove of the same token
+/// must revert with TokenNotWhitelisted. Confirms the state transition is
+/// not re-entrant or accidentally idempotent.
+#[test]
+fn test_remove_whitelisted_token_double_remove_second_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token2 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+    client.add_whitelisted_token(&admin_addr, &token2);
+
+    // First remove: B → A (valid)
+    client.remove_whitelisted_token(&admin_addr, &token2);
+    assert!(!client.is_token_whitelisted(&token2));
+
+    // Second remove: A → A (must revert)
+    let result = client.try_remove_whitelisted_token(&admin_addr, &token2);
+    assert_eq!(
+        result,
+        Err(Ok(Error::TokenNotWhitelisted)),
+        "expected TokenNotWhitelisted on second remove (A→A)"
+    );
+}
+
+/// Matrix row 7 — Sibling isolation: removing one token must not affect others
+/// When multiple tokens are whitelisted, removing one must leave all siblings
+/// in the Whitelisted state and unchanged in order.
+#[test]
+fn test_remove_whitelisted_token_does_not_affect_siblings() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token2 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token3 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+    client.add_whitelisted_token(&admin_addr, &token2);
+    client.add_whitelisted_token(&admin_addr, &token3);
+
+    // Whitelist: [token1, token2, token3]
+    assert_eq!(client.get_whitelisted_tokens().unwrap().len(), 3);
+
+    // Remove only token2
+    client.remove_whitelisted_token(&admin_addr, &token2);
+
+    // token2 must be gone
+    assert!(!client.is_token_whitelisted(&token2));
+
+    // Siblings token1 and token3 must still be Whitelisted
+    assert!(
+        client.is_token_whitelisted(&token1),
+        "token1 (sibling) must remain Whitelisted"
+    );
+    assert!(
+        client.is_token_whitelisted(&token3),
+        "token3 (sibling) must remain Whitelisted"
+    );
+
+    // Total count must be 2
+    assert_eq!(client.get_whitelisted_tokens().unwrap().len(), 2);
+}
+
+/// Matrix row 8 — Remove the escrow job token itself
+/// The whitelist is separate from the job token used in the escrow. Admin
+/// must be able to remove the job token from the whitelist. This verifies
+/// that no special case blocks removal of the token that was passed to
+/// initialize().
+#[test]
+fn test_remove_whitelisted_token_can_remove_escrow_job_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token1 = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 1_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token1,
+        &604800,
+        &amounts,
+    );
+
+    // initialize() auto-whitelists token1 (the job token)
+    assert!(client.is_token_whitelisted(&token1));
+
+    // Admin removes it — this is a valid B → A transition
+    let result = client.try_remove_whitelisted_token(&admin_addr, &token1);
+    assert!(
+        result.is_ok(),
+        "should be able to remove the escrow job token from whitelist"
+    );
+    assert!(!client.is_token_whitelisted(&token1));
+    assert_eq!(client.get_whitelisted_tokens().unwrap().len(), 0);
+}
