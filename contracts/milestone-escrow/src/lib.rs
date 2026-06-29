@@ -478,11 +478,14 @@ impl MilestoneEscrow {
         }
 
         let total_amount = Self::validate_fund_amount(&env, &meta)?;
-        let token_client = token::Client::new(&env, &meta.token);
-        token_client.transfer(&client, &env.current_contract_address(), &total_amount);
-
+        
+        // Update status BEFORE token transfer to ensure state is persisted
+        // and prevent double-funding via reentrancy
         meta.funded = true;
         Self::store_job_meta(&env, &meta);
+        
+        let token_client = token::Client::new(&env, &meta.token);
+        token_client.transfer(&client, &env.current_contract_address(), &total_amount);
 
         env.events().publish(
             (symbol_short!("fund"),),
