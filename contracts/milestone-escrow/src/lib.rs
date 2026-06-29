@@ -751,6 +751,18 @@ impl MilestoneEscrow {
     }
 
     pub fn approve_milestone(env: Env, client: Address, milestone_index: u32) -> Result<(), Error> {
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+        if client == zero_account || client == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
+
         client.require_auth();
         let meta = Self::load_job_meta(&env)?;
 
