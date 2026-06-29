@@ -581,6 +581,18 @@ impl MilestoneEscrow {
     freelancer: Address,
     milestone_index: u32,
 ) -> Result<(), Error> {
+    // Block the Stellar Public Key Zero Address.
+    let zero_account = Address::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    );
+    let zero_contract = Address::from_str(
+        &env,
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+    );
+    if freelancer == zero_account || freelancer == zero_contract {
+        return Err(Error::InvalidAddress);
+    }
     freelancer.require_auth();
     let meta = Self::load_job_meta(&env)?;
 
