@@ -5062,3 +5062,41 @@ fn test_remove_whitelisted_token_rejects_zero_contract_address() {
     let result = client.try_remove_whitelisted_token(&admin_addr, &zero_contract);
     assert_eq!(result, Err(Ok(Error::InvalidAddress)));
 }
+
+#[test]
+fn test_claim_auto_release_reverts_on_zero_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &10_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 10_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &100,
+        &amounts,
+    );
+
+    let zero_address =
+        Address::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+
+    // Call the contract method using the zero address—should trip the error guard
+    let result = client.try_claim_auto_release(&zero_address, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
