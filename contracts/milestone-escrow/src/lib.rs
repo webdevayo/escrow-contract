@@ -100,7 +100,10 @@ pub struct InitializedEvent {
     pub freelancer: Address,
     pub arbiter: Address,
     pub token: Address,
+    pub auto_release_seconds: u64,
     pub milestone_amounts: Vec<i128>,
+    pub total_amount: i128,
+    pub milestone_count: u32,
 }
 
 #[contracttype]
@@ -281,6 +284,15 @@ impl MilestoneEscrow {
         Ok(total_amount)
     }
 
+    fn validate_fund_amount(env: &Env, meta: &JobMeta) -> Result<i128, Error> {
+        let total_amount = Self::checked_job_total(env, meta)?;
+        if total_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        Ok(total_amount)
+    }
+
     fn validate_fund_client(env: &Env, client: &Address) -> Result<(), Error> {
         if client == &env.current_contract_address() {
             return Err(Error::InvalidAddress);
@@ -322,8 +334,21 @@ impl MilestoneEscrow {
 
         let milestone_count = milestone_amounts.len();
         let mut total_amount: i128 = 0;
-        for amount in milestone_amounts.iter() {
+        for index in 0..milestone_count {
+            let amount = milestone_amounts
+                .get(index)
+                .ok_or(Error::InvalidMilestone)?;
             total_amount = Self::checked_add_amount(total_amount, amount)?;
+            Self::store_milestone(
+                &env,
+                index,
+                &Milestone {
+                    amount,
+                    released_amount: 0,
+                    status: MilestoneStatus::Pending,
+                    delivered_at: 0,
+                },
+            );
         }
 
         env.storage().persistent().set(&DataKey::Admin, &admin);
@@ -333,19 +358,6 @@ impl MilestoneEscrow {
         env.storage()
             .persistent()
             .set(&DataKey::WhitelistedTokens, &whitelist);
-
-        for (index, amount) in milestone_amounts.iter().enumerate() {
-            Self::store_milestone(
-                &env,
-                index as u32,
-                &Milestone {
-                    amount,
-                    released_amount: 0,
-                    status: MilestoneStatus::Pending,
-                    delivered_at: 0,
-                },
-            );
-        }
 
         let meta = JobMeta {
             client,
@@ -360,6 +372,9 @@ impl MilestoneEscrow {
 
         Self::store_job_meta(&env, &meta);
 
+        // Emit a structured initialization event so downstream indexers can
+        // record all operational parameters from a single on-chain event without
+        // having to query contract storage separately.
         env.events().publish(
             (symbol_short!("init"),),
             InitializedEvent {
@@ -367,7 +382,10 @@ impl MilestoneEscrow {
                 freelancer: meta.freelancer,
                 arbiter: meta.arbiter,
                 token: meta.token,
+                auto_release_seconds: meta.auto_release_seconds,
                 milestone_amounts,
+                total_amount: meta.total_amount,
+                milestone_count: meta.milestone_count,
             },
         );
 
@@ -542,7 +560,7 @@ impl MilestoneEscrow {
             return Err(Error::Unauthorized);
         }
 
-        let total_amount = meta.total_amount;
+        let total_amount = Self::validate_fund_amount(&env, &meta)?;
         let token_client = token::Client::new(&env, &meta.token);
         token_client.transfer(&client, &env.current_contract_address(), &total_amount);
 
@@ -655,6 +673,18 @@ impl MilestoneEscrow {
     freelancer: Address,
     milestone_index: u32,
 ) -> Result<(), Error> {
+    // Block the Stellar Public Key Zero Address.
+    let zero_account = Address::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    );
+    let zero_contract = Address::from_str(
+        &env,
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+    );
+    if freelancer == zero_account || freelancer == zero_contract {
+        return Err(Error::InvalidAddress);
+    }
     freelancer.require_auth();
     let meta = Self::load_job_meta(&env)?;
 
