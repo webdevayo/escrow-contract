@@ -246,6 +246,15 @@ impl MilestoneEscrow {
         Ok(total_amount)
     }
 
+    fn validate_fund_amount(env: &Env, meta: &JobMeta) -> Result<i128, Error> {
+        let total_amount = Self::checked_job_total(env, meta)?;
+        if total_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        Ok(total_amount)
+    }
+
     fn validate_fund_client(env: &Env, client: &Address) -> Result<(), Error> {
         if client == &env.current_contract_address() {
             return Err(Error::InvalidAddress);
@@ -468,7 +477,7 @@ impl MilestoneEscrow {
             return Err(Error::Unauthorized);
         }
 
-        let total_amount = meta.total_amount;
+        let total_amount = Self::validate_fund_amount(&env, &meta)?;
         let token_client = token::Client::new(&env, &meta.token);
         token_client.transfer(&client, &env.current_contract_address(), &total_amount);
 
