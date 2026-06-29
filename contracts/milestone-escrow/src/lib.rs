@@ -417,6 +417,11 @@ impl MilestoneEscrow {
             return Err(Error::Unauthorized);
         }
 
+        let meta = Self::load_job_meta(&env)?;
+        if meta.funded {
+            return Err(Error::AlreadyFunded);
+        }
+
         let mut whitelist: Vec<Address> = env
             .storage()
             .persistent()
@@ -453,6 +458,18 @@ impl MilestoneEscrow {
     pub fn remove_whitelisted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin.require_auth();
 
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+        if token == zero_account || token == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
+
         let stored_admin: Address = env
             .storage()
             .persistent()
@@ -461,6 +478,11 @@ impl MilestoneEscrow {
 
         if admin != stored_admin {
             return Err(Error::Unauthorized);
+        }
+
+        let meta = Self::load_job_meta(&env)?;
+        if meta.funded {
+            return Err(Error::AlreadyFunded);
         }
 
         let mut whitelist: Vec<Address> = env
