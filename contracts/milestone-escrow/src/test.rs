@@ -359,7 +359,9 @@ fn test_mark_delivered_invalid_amount_fails() {
         delivered_at: 0,
     };
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set(&DataKey::Milestone(0u32), &milestone);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Milestone(0u32), &milestone);
     });
 
     let result = client.try_mark_delivered(&freelancer_addr, &0u32);
@@ -1028,9 +1030,7 @@ fn test_fund_rejects_missing_milestone_index() {
     );
 
     env.as_contract(&contract_id, || {
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Milestone(1u32));
+        env.storage().persistent().remove(&DataKey::Milestone(1u32));
     });
 
     let result = client.try_fund(&client_addr);
@@ -1622,7 +1622,7 @@ fn test_approve_partial_large_amounts_fails() {
     client.fund(&client_addr);
     client.mark_delivered(&freelancer_addr, &0u32);
     client.approve_partial(&client_addr, &0u32, &1_i128);
-    
+
     // Try to approve an amount that would overflow released_amount
     let result = client.try_approve_partial(&client_addr, &0u32, &i128::MAX);
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
@@ -2250,8 +2250,6 @@ fn test_claim_auto_release_not_initialized_fails() {
     assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
 
-
-
 #[test]
 fn test_claim_auto_release_disputed_status_fails() {
     let env = Env::default();
@@ -2690,8 +2688,7 @@ fn test_claim_auto_release_out_of_bounds_index_fails() {
     env.mock_all_auths();
 
     let amounts = vec![&env, 5_000_i128];
-    let (_, freelancer_addr, _, _, _, _, client) =
-        setup_funded_escrow(&env, amounts);
+    let (_, freelancer_addr, _, _, _, _, client) = setup_funded_escrow(&env, amounts);
 
     client.mark_delivered(&freelancer_addr, &0u32);
 
@@ -2701,10 +2698,7 @@ fn test_claim_auto_release_out_of_bounds_index_fails() {
 
     // milestone_index 99 is out of bounds (only index 0 exists)
     let result = client.try_claim_auto_release(&freelancer_addr, &99u32);
-    assert_eq!(
-        result,
-        Err(Ok(Error::InvalidMilestone))
-    );
+    assert_eq!(result, Err(Ok(Error::InvalidMilestone)));
 }
 
 #[test]
@@ -2741,10 +2735,7 @@ fn test_claim_auto_release_zero_auto_release_seconds_fails() {
     client.mark_delivered(&freelancer_addr, &0u32);
 
     let result = client.try_claim_auto_release(&freelancer_addr, &0u32);
-    assert_eq!(
-        result,
-        Err(Ok(Error::InvalidAmount))
-    );
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
 #[test]
@@ -4606,9 +4597,22 @@ fn test_initialize_multiple_milestones_all_pending_correct_amounts() {
     let mut total: i128 = 0;
     for (i, &expected_amount) in expected.iter().enumerate() {
         let ms = job.milestones.get(i as u32).unwrap();
-        assert_eq!(ms.amount, expected_amount, "milestone {} amount mismatch", i);
-        assert_eq!(ms.released_amount, 0, "milestone {} released_amount should be 0", i);
-        assert_eq!(ms.status, MilestoneStatus::Pending, "milestone {} should be Pending", i);
+        assert_eq!(
+            ms.amount, expected_amount,
+            "milestone {} amount mismatch",
+            i
+        );
+        assert_eq!(
+            ms.released_amount, 0,
+            "milestone {} released_amount should be 0",
+            i
+        );
+        assert_eq!(
+            ms.status,
+            MilestoneStatus::Pending,
+            "milestone {} should be Pending",
+            i
+        );
         total += expected_amount;
     }
 
@@ -4758,7 +4762,7 @@ fn test_initialize_state_transition_matrix() {
         .register_stellar_asset_contract_v2(admin_addr.clone())
         .address();
     let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
-    
+
     token_admin.mint(&client_addr, &100_000);
 
     let contract_id = env.register(MilestoneEscrow, ());
@@ -4767,7 +4771,7 @@ fn test_initialize_state_transition_matrix() {
     let amounts = vec![&env, 1_000_i128];
 
     // --- Path A: Happy Path ---
-    
+
     // State 0: Uninitialized -> Transition to Initialized (Must Succeed)
     let init_res = escrow.try_initialize(
         &admin_addr,
@@ -4778,7 +4782,10 @@ fn test_initialize_state_transition_matrix() {
         &604800,
         &amounts,
     );
-    assert!(init_res.is_ok(), "Initial transition from Uninitialized to Initialized should succeed");
+    assert!(
+        init_res.is_ok(),
+        "Initial transition from Uninitialized to Initialized should succeed"
+    );
 
     // State 1: Initialized -> Must Revert
     let attempt_init = |escrow: &MilestoneEscrowClient| {
@@ -4793,23 +4800,43 @@ fn test_initialize_state_transition_matrix() {
         )
     };
 
-    assert_eq!(attempt_init(&escrow), Err(Ok(Error::AlreadyInitialized)), "Transition from Initialized must revert");
+    assert_eq!(
+        attempt_init(&escrow),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from Initialized must revert"
+    );
 
     // State 2: Funded -> Must Revert
     escrow.fund(&client_addr);
-    assert_eq!(attempt_init(&escrow), Err(Ok(Error::AlreadyInitialized)), "Transition from Funded must revert");
+    assert_eq!(
+        attempt_init(&escrow),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from Funded must revert"
+    );
 
     // State 3: Delivered -> Must Revert
     escrow.mark_delivered(&freelancer_addr, &0);
-    assert_eq!(attempt_init(&escrow), Err(Ok(Error::AlreadyInitialized)), "Transition from Delivered must revert");
+    assert_eq!(
+        attempt_init(&escrow),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from Delivered must revert"
+    );
 
     // State 4: Partially Released -> Must Revert
     escrow.approve_partial(&client_addr, &0, &500);
-    assert_eq!(attempt_init(&escrow), Err(Ok(Error::AlreadyInitialized)), "Transition from PartiallyReleased must revert");
+    assert_eq!(
+        attempt_init(&escrow),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from PartiallyReleased must revert"
+    );
 
     // State 5: Released -> Must Revert
     escrow.approve_milestone(&client_addr, &0);
-    assert_eq!(attempt_init(&escrow), Err(Ok(Error::AlreadyInitialized)), "Transition from Released must revert");
+    assert_eq!(
+        attempt_init(&escrow),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from Released must revert"
+    );
 
     // --- Path B: Dispute Path ---
     let contract_id2 = env.register(MilestoneEscrow, ());
@@ -4825,14 +4852,22 @@ fn test_initialize_state_transition_matrix() {
         &amounts,
     );
     escrow2.fund(&client_addr);
-    
+
     // State 6: Disputed -> Must Revert
     escrow2.raise_dispute(&client_addr, &0);
-    assert_eq!(attempt_init(&escrow2), Err(Ok(Error::AlreadyInitialized)), "Transition from Disputed must revert");
+    assert_eq!(
+        attempt_init(&escrow2),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from Disputed must revert"
+    );
 
     // State 7: Refunded -> Must Revert (Resolve dispute to client)
     escrow2.resolve_dispute(&arbiter_addr, &0, &false);
-    assert_eq!(attempt_init(&escrow2), Err(Ok(Error::AlreadyInitialized)), "Transition from Refunded must revert");
+    assert_eq!(
+        attempt_init(&escrow2),
+        Err(Ok(Error::AlreadyInitialized)),
+        "Transition from Refunded must revert"
+    );
 }
 
 /// Boundary test 7 — AUTO_RELEASE_SECONDS ZERO:
@@ -4871,7 +4906,10 @@ fn test_initialize_auto_release_seconds_zero_succeeds_claim_fails() {
         &0u64,
         &amounts,
     );
-    assert!(init_result.is_ok(), "initialize with auto_release_seconds=0 should succeed");
+    assert!(
+        init_result.is_ok(),
+        "initialize with auto_release_seconds=0 should succeed"
+    );
 
     escrow.fund(&client_addr);
     escrow.mark_delivered(&freelancer_addr, &0u32);
@@ -5263,10 +5301,134 @@ fn test_claim_auto_release_reverts_on_zero_address() {
         &amounts,
     );
 
-    let zero_address =
-        Address::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+    let zero_address = Address::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    );
 
     // Call the contract method using the zero address—should trip the error guard
     let result = client.try_claim_auto_release(&zero_address, &0u32);
     assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
+
+#[test]
+fn test_reputation_tracking() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &20_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128, 5_000_i128, 5_000_i128, 5_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &604800,
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    // Initial reputation should be 0
+    assert_eq!(client.get_reputation(&client_addr), 0);
+    assert_eq!(client.get_reputation(&freelancer_addr), 0);
+
+    // 1. Full Release (Milestone 0)
+    client.mark_delivered(&freelancer_addr, &0u32);
+    client.approve_milestone(&client_addr, &0u32);
+
+    // Both freelancer and client should have reputation incremented to 1
+    assert_eq!(client.get_reputation(&client_addr), 1);
+    assert_eq!(client.get_reputation(&freelancer_addr), 1);
+
+    // 2. Partial Release (Milestone 1) - Part 1 (not final)
+    client.mark_delivered(&freelancer_addr, &1u32);
+    client.approve_partial(&client_addr, &1u32, &2_000_i128);
+    // Reputation should NOT increment for non-final partial release
+    assert_eq!(client.get_reputation(&client_addr), 1);
+    assert_eq!(client.get_reputation(&freelancer_addr), 1);
+
+    // 2. Partial Release (Milestone 1) - Part 2 (final)
+    client.approve_partial(&client_addr, &1u32, &3_000_i128);
+    // Reputation SHOULD increment now
+    assert_eq!(client.get_reputation(&client_addr), 2);
+    assert_eq!(client.get_reputation(&freelancer_addr), 2);
+
+    // 3. Dispute with Refund (Milestone 2)
+    client.mark_delivered(&freelancer_addr, &2u32);
+    client.raise_dispute(&client_addr, &2u32);
+    // Raising dispute should NOT increment reputation
+    assert_eq!(client.get_reputation(&client_addr), 2);
+    assert_eq!(client.get_reputation(&freelancer_addr), 2);
+
+    client.resolve_dispute(&arbiter_addr, &2u32, &false); // refund
+                                                          // Refund should NOT increment reputation
+    assert_eq!(client.get_reputation(&client_addr), 2);
+    assert_eq!(client.get_reputation(&freelancer_addr), 2);
+
+    // 4. Dispute with Release to Freelancer (Milestone 3)
+    client.mark_delivered(&freelancer_addr, &3u32);
+    client.raise_dispute(&client_addr, &3u32);
+    client.resolve_dispute(&arbiter_addr, &3u32, &true); // release
+                                                         // Resolution in favor of freelancer SHOULD increment reputation
+    assert_eq!(client.get_reputation(&client_addr), 3);
+    assert_eq!(client.get_reputation(&freelancer_addr), 3);
+}
+
+#[test]
+fn test_reputation_auto_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let admin_addr = Address::generate(&env);
+
+    let token_contract_id = env
+        .register_stellar_asset_contract_v2(admin_addr.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+    token_admin.mint(&client_addr, &5_000);
+
+    let contract_id = env.register(MilestoneEscrow, ());
+    let client = MilestoneEscrowClient::new(&env, &contract_id);
+
+    let amounts = vec![&env, 5_000_i128];
+    client.initialize(
+        &admin_addr,
+        &client_addr,
+        &freelancer_addr,
+        &arbiter_addr,
+        &token_contract_id,
+        &100, // 100 seconds auto-release
+        &amounts,
+    );
+    client.fund(&client_addr);
+
+    client.mark_delivered(&freelancer_addr, &0u32);
+
+    // Jump time ahead by 101 seconds
+    env.ledger().with_mut(|li| {
+        li.timestamp += 101;
+    });
+
+    client.claim_auto_release(&freelancer_addr, &0u32);
+
+    // Auto-release claim SHOULD increment reputation
+    assert_eq!(client.get_reputation(&client_addr), 1);
+    assert_eq!(client.get_reputation(&freelancer_addr), 1);
 }
