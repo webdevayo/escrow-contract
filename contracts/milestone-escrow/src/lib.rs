@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
+    Vec,
 };
 
 /// Maximum number of tokens that may be held in the whitelist at any one time.
@@ -76,6 +77,7 @@ pub enum DataKey {
     Job,
     Milestone(u32),
     Admin,
+    Version,
     WhitelistedTokens,
     /// Temporary key: records the ledger timestamp at which a milestone was
     /// marked delivered.  Written by `mark_delivered`, consumed by
@@ -354,6 +356,7 @@ impl MilestoneEscrow {
         }
 
         env.storage().persistent().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Version, &1u32);
 
         let mut whitelist: Vec<Address> = Vec::new(&env);
         whitelist.push_back(token.clone());
@@ -1030,6 +1033,40 @@ impl MilestoneEscrow {
         );
 
         Ok(())
+    }
+
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        let current: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(1);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &(current + 1));
+
+        Ok(())
+    }
+
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(1)
     }
 
     pub fn get_job(env: Env) -> Result<Job, Error> {
