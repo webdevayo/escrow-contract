@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
+    Vec,
 };
 
 /// Maximum number of tokens that may be held in the whitelist at any one time.
@@ -76,6 +77,7 @@ pub enum DataKey {
     Job,
     Milestone(u32),
     Admin,
+    Version,
     WhitelistedTokens,
     /// Temporary key: records the ledger timestamp at which a milestone was
     /// marked delivered.  Written by `mark_delivered`, consumed by
@@ -359,6 +361,7 @@ impl MilestoneEscrow {
         }
 
         env.storage().persistent().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Version, &1u32);
 
         let mut whitelist: Vec<Address> = Vec::new(&env);
         whitelist.push_back(token.clone());
@@ -480,18 +483,6 @@ impl MilestoneEscrow {
     pub fn remove_whitelisted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin.require_auth();
 
-        let zero_account = Address::from_str(
-            &env,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-        );
-        let zero_contract = Address::from_str(
-            &env,
-            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
-        );
-        if token == zero_account || token == zero_contract {
-            return Err(Error::InvalidAddress);
-        }
-
         let stored_admin: Address = env
             .storage()
             .persistent()
@@ -507,6 +498,18 @@ impl MilestoneEscrow {
             return Err(Error::AlreadyFunded);
         }
 
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+        if token == zero_account || token == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
+
         let mut whitelist: Vec<Address> = env
             .storage()
             .persistent()
@@ -514,7 +517,13 @@ impl MilestoneEscrow {
             .ok_or(Error::NotInitialized)?;
 
         if let Some(index) = whitelist.iter().position(|t| t == token) {
-            whitelist.remove(index as u32);
+            let last = whitelist.len() - 1;
+            if (index as u32) != last {
+                let last_elem = whitelist.get(last).unwrap();
+                whitelist.set(index as u32, last_elem);
+            }
+            whitelist.pop_back();
+            let remaining_count = whitelist.len();
             env.storage()
                 .persistent()
                 .set(&DataKey::WhitelistedTokens, &whitelist);
@@ -812,6 +821,9 @@ impl MilestoneEscrow {
         if meta.client != client {
             return Err(Error::Unauthorized);
         }
+        if !meta.funded {
+            return Err(Error::NotFunded);
+        }
 
         if milestone_index >= meta.milestone_count {
             return Err(Error::InvalidMilestone);
@@ -880,26 +892,34 @@ impl MilestoneEscrow {
     }
 
     pub fn approve_milestone(env: Env, client: Address, milestone_index: u32) -> Result<(), Error> {
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+        if client == zero_account || client == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
+
         client.require_auth();
         let meta = Self::load_job_meta(&env)?;
 
         if meta.client != client {
             return Err(Error::Unauthorized);
         }
+        if !meta.funded {
+            return Err(Error::NotFunded);
+        }
 
         if milestone_index >= meta.milestone_count {
             return Err(Error::InvalidMilestone);
         }
 
-        let mut milestone = Self::load_milestone(&env, milestone_index)?;
-
-        if milestone.amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
-
-        if milestone.status != MilestoneStatus::Delivered
-            && milestone.status != MilestoneStatus::PartiallyReleased
-        {
+       let mut milestone = Self::load_milestone(&env, milestone_index)?;
+       if milestone.status != MilestoneStatus::Delivered {
             return Err(Error::InvalidStatus);
         }
 
@@ -956,11 +976,27 @@ impl MilestoneEscrow {
     }
 
     pub fn raise_dispute(env: Env, caller: Address, milestone_index: u32) -> Result<(), Error> {
+        // Check for zero addresses (both account and contract types)
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+
+        if caller == zero_account || caller == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
         caller.require_auth();
         let meta = Self::load_job_meta(&env)?;
 
         if meta.client != caller && meta.freelancer != caller {
             return Err(Error::Unauthorized);
+        }
+        if !meta.funded {
+            return Err(Error::NotFunded);
         }
 
         let mut milestone = Self::load_milestone(&env, milestone_index)?;
@@ -992,11 +1028,27 @@ impl MilestoneEscrow {
         milestone_index: u32,
         release_to_freelancer: bool,
     ) -> Result<(), Error> {
+        // Check for zero addresses (both account and contract types)
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+
+        if arbiter == zero_account || arbiter == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
         arbiter.require_auth();
         let meta = Self::load_job_meta(&env)?;
 
         if meta.arbiter != arbiter {
             return Err(Error::Unauthorized);
+        }
+        if !meta.funded {
+            return Err(Error::NotFunded);
         }
 
         let mut milestone = Self::load_milestone(&env, milestone_index)?;
@@ -1037,6 +1089,40 @@ impl MilestoneEscrow {
         );
 
         Ok(())
+    }
+
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        let current: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(1);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &(current + 1));
+
+        Ok(())
+    }
+
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(1)
     }
 
     pub fn get_job(env: Env) -> Result<Job, Error> {
